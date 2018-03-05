@@ -1,5 +1,4 @@
-
-#include "SVD" // Eigen 3.3.3 is required
+#include <Eigen/SVD> // Eigen is required
 
 template<int R, int C>
 static inline void pseudoInverse(float A[], float B[])

@@ -1,0 +1,4 @@
+[submodule "PvrtcCompress/eigen"]
+	path = PvrtcCompress/eigen
+	url = ../eigen.git
+	branch = master
