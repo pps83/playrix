@@ -1,0 +1,4 @@
+/build.msvc
+.vs/
+*.VC.VC.opendb
+*.VC.db
