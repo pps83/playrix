@@ -9,22 +9,16 @@
 //#define OPTION_LINEAR
 //#define OPTION_SLOWPOKE
 
-#ifdef WIN32
+#ifndef LIBETC2
+#ifdef _WIN32
 #include <windows.h>
 #pragma warning(push)
 #pragma warning(disable : 4458)
 #include <gdiplus.h>
 #pragma warning(pop)
-#endif
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <stdint.h>
-#include <math.h>
-#ifndef OPTION_SLOWPOKE
-#include <smmintrin.h> // SSE4.1
+#pragma comment(lib, "gdiplus.lib")
 #else
-#include <emmintrin.h> // SSE2
+#include <boost/thread.hpp>
 #endif
 #include <atomic>
 #include <chrono>
@@ -32,23 +26,30 @@
 #include <string>
 #include <thread>
 #include <vector>
+#endif
 
-#ifndef WIN32
-#include <boost/thread.hpp>
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <math.h>
+#include <string.h>
+#include <algorithm>
+#ifndef OPTION_SLOWPOKE
+#include <smmintrin.h> // SSE4.1
+#else
+#include <emmintrin.h> // SSE2
+#endif
+
+#ifdef _MSC_VER
+#define INLINED __forceinline
+#define NOTINLINED __declspec(noinline)
+#define M128I_I32(mm, index) ((mm).m128i_i32[index])
+#else
 #ifdef __APPLE__
 #include <libkern/OSByteOrder.h>
 #else
 #include <byteswap.h>
 #endif
-#endif
-
-#ifdef WIN32
-#pragma comment(lib, "gdiplus.lib")
-
-#define INLINED __forceinline
-#define NOTINLINED __declspec(noinline)
-#define M128I_I32(mm, index) ((mm).m128i_i32[index])
-#else
 #define INLINED __attribute__((always_inline))
 #define NOTINLINED __attribute__((noinline))
 #define M128I_I32(mm, index) (reinterpret_cast<int32_t(&)[4]>(mm)[index])
@@ -152,9 +153,32 @@ static const double g_ssim_8k2L = g_ssim_8k1L * 9;
 static const double g_ssim_16k1L = (0.01 * 255 * 16) * (0.01 * 255 * 16);
 static const double g_ssim_16k2L = g_ssim_16k1L * 9;
 
+#ifndef LIBETC2
 static const int WorkerThreadStackSize = 3 * 1024 * 1024;
 
 static int Stride;
+#endif
+
+#if !(defined(_M_X64) || defined(__amd64__)) && (defined(__i386__) || defined(_M_IX86))
+#include <intrin.h>
+#include <immintrin.h>
+
+static inline __m128i _mm_cvtsi64_si128(__int64 a)
+{
+    return _mm_set_epi64x(0, a);
+}
+static inline __int64 _mm_extract_epi64(__m128i a, const int b)
+{
+    if (b == 0)
+        return __int64(_mm_extract_epi32(a, 0)) | (__int64(_mm_extract_epi32(a, 1)) << 32);
+    else
+        return __int64(_mm_extract_epi32(a, 2)) | (__int64(_mm_extract_epi32(a, 3)) << 32);
+}
+static inline __int64 _mm_cvtsi128_si64(__m128i a)
+{
+    return _mm_extract_epi64(a, 0);
+}
+#endif
 
 #ifdef OPTION_SLOWPOKE
 
@@ -253,7 +277,7 @@ static INLINED __m128i emu_packus_epi32_small(__m128i a, __m128i b)
 
 #endif
 
-#ifdef WIN32
+#ifdef _WIN32
 
 static INLINED uint32_t BSWAP(uint32_t x)
 {
@@ -1710,6 +1734,7 @@ static INLINED void DecompressBlockAlphaEnhanced(const uint8_t input[8], uint8_t
 	cell[15] = alphas[(codes >> (0 * 3)) & 7];
 }
 
+#ifndef LIBETC2
 static INLINED int CompareBlocksAlpha(const uint8_t* __restrict cell1, size_t stride1, const uint8_t* __restrict cell2, size_t stride2)
 {
 	int err = 0;
@@ -1760,7 +1785,7 @@ static INLINED double CompareBlocksAlphaSSIM(const uint8_t* __restrict cell1, si
 
 	return _mm_cvtsd_f64(mssim);
 }
-
+#endif
 
 static INLINED void ComputeTableAlphaEnhanced(uint8_t output[8], const Area& area, int alpha, int q)
 {
@@ -2350,6 +2375,7 @@ static INLINED void DecompressBlockColorEnhanced(const uint8_t input[8], uint8_t
 	}
 }
 
+#ifndef LIBETC2
 static INLINED int CompareBlocksColor(const uint8_t* __restrict cell1, size_t stride1, const uint8_t* __restrict cell2, size_t stride2)
 {
 	int err_g = 0;
@@ -2448,7 +2474,7 @@ static INLINED double CompareBlocksColorSSIM(const uint8_t* __restrict cell1, si
 
 	return ssim * (1.0 / kColor);
 }
-
+#endif
 
 #ifdef __clang__
 #define SWAP_PAIR(a, b) { Node va = nodep[a], vb = nodep[b]; if (va.Error > vb.Error) { nodep[a] = vb; nodep[b] = va; } }
@@ -4456,9 +4482,9 @@ static INLINED int AdjustColors53(const Elem& elem, uint8_t color[4], uint8_t ot
 	return water;
 }
 
-static int CompressBlockColor53(BlockStateColor &s, const Elem& elem, int water, int mode)
+static int CompressBlockColor53(BlockStateColor &s, const Elem& elem, int water, int mode, AdjustStateColorGroup gagb[2])
 {
-	AdjustStateColorGroup GB;
+	AdjustStateColorGroup& GB = gagb[0];
 
 	GB.Init(elem.B, water);
 
@@ -4466,7 +4492,7 @@ static int CompressBlockColor53(BlockStateColor &s, const Elem& elem, int water,
 	if (stopB >= water)
 		return water;
 
-	AdjustStateColorGroup GA;
+	AdjustStateColorGroup& GA = gagb[1];
 
 	GA.Init(elem.A, water - stopB);
 
@@ -4570,7 +4596,14 @@ static double EstimateChromaDispersion(const Half& half)
 	return double(srr * n - sr * sr) * g_r_nn[n - 2] + double(sbb * n - sb * sb) * g_b_nn[n - 2];
 }
 
-static int CompressBlockColor(uint8_t output[8], const uint8_t* __restrict cell, size_t stride, int input_error)
+static int CompressBlockColor1(uint8_t output[8], const uint8_t* __restrict cell, size_t stride, int input_error, AdjustStateColorGroup gagb[2]);
+static INLINED int CompressBlockColor(uint8_t output[8], const uint8_t* __restrict cell, size_t stride, int input_error)
+{
+	AdjustStateColorGroup gagb[2];
+	return CompressBlockColor1(output, cell, stride, input_error, gagb);
+}
+
+static int CompressBlockColor1(uint8_t output[8], const uint8_t* __restrict cell, size_t stride, int input_error, AdjustStateColorGroup gagb[2])
 {
 	Elem norm, flip;
 
@@ -4638,13 +4671,13 @@ static int CompressBlockColor(uint8_t output[8], const uint8_t* __restrict cell,
 
 				if (err > 0)
 				{
-					int err_norm53 = CompressBlockColor53(s, norm, err, 2);
+					int err_norm53 = CompressBlockColor53(s, norm, err, 2, gagb);
 					if (err > err_norm53)
 						err = err_norm53;
 
 					if (err > 0)
 					{
-						int err_flip53 = CompressBlockColor53(s, flip, err, 3);
+						int err_flip53 = CompressBlockColor53(s, flip, err, 3, gagb);
 						if (err > err_flip53)
 							err = err_flip53;
 					}
@@ -4665,13 +4698,13 @@ static int CompressBlockColor(uint8_t output[8], const uint8_t* __restrict cell,
 
 				if (err > 0)
 				{
-					int err_flip53 = CompressBlockColor53(s, flip, err, 3);
+					int err_flip53 = CompressBlockColor53(s, flip, err, 3, gagb);
 					if (err > err_flip53)
 						err = err_flip53;
 
 					if (err > 0)
 					{
-						int err_norm53 = CompressBlockColor53(s, norm, err, 2);
+						int err_norm53 = CompressBlockColor53(s, norm, err, 2, gagb);
 						if (err > err_norm53)
 							err = err_norm53;
 					}
@@ -6543,7 +6576,7 @@ static int CompressBlockColorEnhanced(uint8_t output[8], const uint8_t* __restri
 	return err;
 }
 
-
+#ifndef LIBETC2
 enum class PackMode
 {
 	CompressAlphaEnhanced, DecompressAlphaEnhanced,
@@ -7351,3 +7384,4 @@ int __cdecl main(int argc, char* argv[])
 
 	return Etc2MainWithArgs(args);
 }
+#endif
